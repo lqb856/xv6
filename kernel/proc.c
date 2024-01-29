@@ -89,6 +89,18 @@ myproc(void)
   return p;
 }
 
+uint64 num_proc(void) {
+  uint64 num_proc = 0;
+  struct proc *p;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    num_proc += (p->state != UNUSED);
+    release(&p->lock);
+  }
+  return num_proc;
+}
+
 int
 allocpid()
 {
