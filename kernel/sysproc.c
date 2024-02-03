@@ -75,7 +75,27 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-  return 0;
+  uint64 start_va = 0;
+  int num_pages = 0;
+  uint64 res_addr = 0;
+  char res[8];
+  memset(res, 0, 8);
+
+  argaddr(0, &start_va);
+  argint(1, &num_pages);
+  argaddr(2, &res_addr);
+
+  if (num_pages > 64) {
+    panic("max pages to check is 64!");
+    return -1;
+  }
+
+  struct proc *p = myproc();
+  if (vm_check_access(p->pagetable, start_va, num_pages, res) < 0) {
+    return -1;
+  }
+
+  return copyout(p->pagetable, res_addr, res, (num_pages + 7) / 8);
 }
 #endif
 

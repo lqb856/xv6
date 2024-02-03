@@ -293,6 +293,54 @@ freewalk(pagetable_t pagetable)
   kfree((void*)pagetable);
 }
 
+void
+vmprint_level(pagetable_t pagetable, int level) {
+  if (level > 3) {
+    return;
+  }
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i ++){
+    pte_t pte = pagetable[i];
+    if (!(pte & PTE_V)) {
+      continue;
+    }
+
+    for (int j = 0; j < level; j ++) {
+      printf(" ..");
+    }
+    printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+
+    if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      vmprint_level((pagetable_t)child, level + 1);
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pagetable) {
+  printf("page table %p\n", pagetable);
+  vmprint_level(pagetable, 1);
+}
+
+int
+vm_check_access(pagetable_t page_table, uint64 start_va, int num_pages, char *bitmask) {
+  for (uint64 i = 0; i < num_pages; i++) {
+    pte_t *pte = walk(page_table, start_va + i * PGSIZE, 0);
+    if (pte == 0) {
+      return -1;
+    }
+
+    if (*pte & PTE_A) {
+      bitmask[i / 8] |= 1 << i % 8;
+      *pte &= (~PTE_A);
+      // printf("%p, set %d, byte %d, bit %d\n", *pte, i, i / 8, i % 8);
+    }
+  }
+  return 0;
+}
+
 // Free user memory pages,
 // then free page-table pages.
 void
