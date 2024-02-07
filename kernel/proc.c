@@ -146,6 +146,11 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Set up sighandler
+  p->ticks = 0;
+  p->current_ticks = 0;
+  p->sig_handler = 0;
+  p->is_handling = 0;
   return p;
 }
 
@@ -252,6 +257,19 @@ userinit(void)
   p->state = RUNNABLE;
 
   release(&p->lock);
+}
+
+void save_trapframe(void)
+{
+  struct proc *p = myproc();
+  memmove(&p->trapframe_tmp, p->trapframe, sizeof(struct trapframe));
+  p->trapframe->epc = p->sig_handler;
+}
+
+void restore_trapframe(void)
+{
+  struct proc *p = myproc();
+  memmove(p->trapframe, &p->trapframe_tmp, sizeof(struct trapframe));
 }
 
 // Grow or shrink user memory by n bytes.

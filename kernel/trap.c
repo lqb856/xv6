@@ -16,6 +16,9 @@ void kernelvec();
 
 extern int devintr();
 
+void handle_signal();
+void handle_page_fault(void);
+
 void
 trapinit(void)
 {
@@ -65,7 +68,9 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if (r_scause() == 15) {
+    handle_page_fault();
+  } else if ((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -77,8 +82,10 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    handle_signal();
     yield();
+  }
 
   usertrapret();
 }
@@ -219,3 +226,21 @@ devintr()
   }
 }
 
+void handle_signal(void)
+{
+  struct proc *p = myproc();
+  if (p->ticks == 0 || p->is_handling) {
+    return;
+  }
+  if (++p->current_ticks == p->ticks) {
+    p->is_handling = 1;
+    save_trapframe();
+  }
+}
+
+void handle_page_fault(void)
+{
+  uint64 fault_addr = r_stval();
+  struct proc *p = myproc();
+  copy_on_write(p->pagetable, fault_addr);
+}

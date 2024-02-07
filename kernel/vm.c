@@ -315,20 +315,25 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    if (flags & PTE_W) {
+      flags &= ~PTE_W;
+      flags |= PTE_OW;
+    }
+    flags |= PTE_S;
+    *pte &= ~0x3FF;
+    *pte |= flags;
+    ktouch((void*)pa);
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
       goto err;
     }
   }
@@ -352,6 +357,43 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+uint64
+copy_on_write(pagetable_t pagetable, uint64 va)
+{
+  struct proc *p = myproc();
+  uint flags;
+  uint64 pa, newpa;
+  pte_t *pte = walk(pagetable, va, 0);
+
+  if(pte == 0 || (*pte & PTE_V) == 0) {
+    setkilled(p);
+    return -1;
+  }
+  pa = PTE2PA(*pte);
+  flags = PTE_FLAGS(*pte);
+  if((*pte & PTE_S) == 0 || (*pte & PTE_OW) == 0) {
+    setkilled(p);
+    return -1;
+  }
+  if(kref_count((void *)pa) == 1)
+    goto mod_flags;
+  if((newpa = (uint64)kalloc()) == 0) {
+    setkilled(p);
+    return -1;
+  }
+
+  memmove((void *)newpa, (void *)pa, PGSIZE);
+  kfree((void *)pa);
+  *pte = PA2PTE(newpa) | flags;
+  pa = newpa;
+
+ mod_flags:
+  *pte |= PTE_W;
+  *pte &= ~PTE_S;
+  *pte &= ~PTE_OW;
+  return pa;
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -361,15 +403,18 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   uint64 n, va0, pa0;
   pte_t *pte;
 
-  while(len > 0){
+  while(len > 0) {
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
-       (*pte & PTE_W) == 0)
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+      return -1;
+    if((*pte & PTE_W) == 0 && (*pte & PTE_OW) == 0)
       return -1;
     pa0 = PTE2PA(*pte);
+    if((*pte & PTE_W) == 0 && (pa0 = copy_on_write(pagetable, va0)) == -1)
+      return -1;
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
